@@ -27,7 +27,7 @@ The Deployment will automatically scale up from zero replicas when the Service r
 Concurrency
 -----------
 
-To enable autoscaling, first configure ``concurrency`` for your BentoML Service. Concurrency refers to the number of concurrent requests a BentoML Service is able to process simultaneously. Proper concurrency management ensures that a Service can handle varying loads efficiently, maximizing resource utilization while maintaining high-quality service (QoS).
+To enable autoscaling, first configure ``concurrency`` for your BentoML Service. Concurrency refers to the number of concurrent requests a BentoML Service is able to process simultaneously. Proper concurrency management ensures that a Service can handle varying loads efficiently, maximizing resource utilization while maintaining high quality of service (QoS).
 
 Use the ``@bentoml.service`` decorator to set concurrency:
 
@@ -69,7 +69,7 @@ When the external queue is enabled, BentoCloud will hold excess requests in the 
 
 .. note::
 
-    Using the external queue increases the latency of the Service because the extra IO operations are needed to handle the requests in the queue.
+    Using the external queue increases the latency of the Service because the extra I/O operations are needed to handle the requests in the queue.
 
 You can enhance concurrency management with an external request queue on BentoCloud using the ``@bentoml.service`` decorator:
 
@@ -88,24 +88,16 @@ You can enhance concurrency management with an external request queue on BentoCl
 
     If you enable ``external_queue`` in the ``@bentoml.service`` decorator, you must specify a ``concurrency`` value.
 
-It's worth noting that when external queue is enabled, ``max_concurrency`` will no longer take effect because BentoCloud guarantees the Service will never receive more requests simultaneously than the ``concurrency`` setting allows. Therefore, ``max_concurrency`` is never reached.
+It's worth noting that when the external queue is enabled, ``max_concurrency`` will no longer take effect because BentoCloud guarantees the Service will never receive more requests simultaneously than the ``concurrency`` setting allows. Therefore, ``max_concurrency`` is never reached.
 
 Autoscaling policies
 --------------------
 
-You can customize scaling behavior to match your Service's needs with scaling-up and scaling-down policies.
+You can customize scaling behavior to match your Service's needs with the stabilization window.
 
-Allowed scaling-up policies (``scale_up_behavior``):
+The stabilization window defines a time period during which the autoscaler temporarily holds off on scaling the number of replicas up or down. This helps prevent rapid or unnecessary scaling in response to short-lived spikes or drops in traffic.
 
-- ``fast`` (default): There is no stabilization window, so the autoscaler can increase the number of replicas immediately if necessary. It can increase the number of replicas by 100% or by 4 replicas, whichever is higher, every 15 seconds.
-- ``stable``: The autoscaler can increase the number of replicas, but it will stabilize the number of replicas for 600 seconds (10 minutes) before deciding to scale up further. It can increase the number of replicas by 100% every 15 seconds.
-- ``disabled``: Scaling-up is turned off.
-
-Allowed scaling-down policies (``scale_down_behavior``):
-
-- ``fast``: There is no stabilization window, so the autoscaler can reduce the number of replicas immediately if necessary. It can decrease the number of replicas by 100% or by 4 replicas, whichever is higher, every 15 seconds.
-- ``stable`` (default): The autoscaler can reduce the number of replicas, but it will stabilize the number of replicas for 600 seconds (10 minutes) before deciding to scale down further. It can decrease the number of replicas by 100% every 15 seconds.
-- ``disabled``: Scaling-down is turned off.
+You can set the stabilization window to any value between 0 and 3600 seconds.
 
 To set autoscaling policies, you need to configure the above fields in a separate YAML or JSON file. For example:
 
@@ -118,8 +110,8 @@ To set autoscaling policies, you need to configure the above fields in a separat
           max_replicas: 2
           min_replicas: 1
           policy:
-            scale_down_behavior: "disabled | stable | fast"  # Choose the behavior
-            scale_up_behavior: "disabled | stable | fast"  # Choose the behavior
+            scale_up_stabilization_window: 180
+            scale_down_stabilization_window: 600
 
 You can then deploy your project by referencing this file.
 

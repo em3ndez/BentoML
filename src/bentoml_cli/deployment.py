@@ -387,6 +387,7 @@ def deployment_command():
     help="Configuration json string",
     default=None,
 )
+@build_args_option
 @inject
 def update(  # type: ignore
     name: str | None,
@@ -499,12 +500,6 @@ def update(  # type: ignore
     "--config-file",
     type=click.File(),
     help="Configuration file path",
-    default=None,
-)
-@click.option(
-    "-f",
-    "--config-file",
-    help="Configuration file path, mututally exclusive with other config options",
     default=None,
 )
 @click.option(
@@ -645,6 +640,7 @@ def apply(  # type: ignore
     default=3600,
     help="Timeout for deployment to be ready in seconds",
 )
+@build_args_option
 def create(
     bento: str | None,
     name: str | None,
