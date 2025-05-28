@@ -65,7 +65,10 @@ class Image:
             self.base_image = distro_config["python"]["image"].format(
                 spec_version=python_version
             )
-            self.commands.insert(0, distro_config["default_install_command"])
+        if self.distro in CONTAINER_METADATA:
+            self.commands.insert(
+                0, CONTAINER_METADATA[self.distro]["default_install_command"]
+            )
 
     def system_packages(self, *packages: str) -> t.Self:
         if self.distro not in CONTAINER_METADATA:
@@ -91,6 +94,8 @@ class Image:
 
             image = Image("debian:latest").requirements_file("requirements.txt")
         """
+        if self.post_commands:
+            raise BentoMLConfigException("Can't separate adding python requirements")
         self.python_requirements += Path(file_path).read_text().rstrip("\n") + "\n"
         self._after_pip_install = True
         return self
@@ -104,6 +109,8 @@ class Image:
 
             image = Image("debian:latest").pyproject_toml("pyproject.toml")
         """
+        if self.post_commands:
+            raise BentoMLConfigException("Can't separate adding python requirements")
         with Path(file_path).open("rb") as f:
             pyproject_toml = tomllib.load(f)
         dependencies = pyproject_toml.get("project", {}).get("dependencies", {})
@@ -121,6 +128,8 @@ class Image:
                 .python_packages("numpy", "pandas")\
                 .requirements_file("requirements.txt")
         """
+        if self.post_commands:
+            raise BentoMLConfigException("Can't separate adding python requirements")
         if not packages:
             raise BentoMLConfigException("No packages provided")
         self.python_requirements += "\n".join(packages) + "\n"
@@ -221,7 +230,10 @@ class Image:
             req.name and req.name.lower() == "bentoml" and req.link is not None
             for req in requirements_file.requirements
         )
+        src_wheels = fs.path.join("src", "wheels")
         wheels_folder = fs.path.join("env", "python", "wheels")
+        if bento_fs.exists(src_wheels):
+            bento_fs.movedir(src_wheels, wheels_folder, create=True)
         with requirements_in.open("w") as f:
             f.write(requirements_file.dumps(preserve_one_empty_line=True))
             if not has_bentoml_req:
@@ -325,7 +337,8 @@ def populate_image_from_build_config(
     python_options = build_config.python
     if python_options.wheels:
         logger.warning(
-            "python.wheels is not supported by bento v2, %s", fallback_message
+            "python.wheels is not supported by bento v2, %s\nAdd the wheels directly into your project instead.",
+            fallback_message,
         )
         if image is None:
             return None

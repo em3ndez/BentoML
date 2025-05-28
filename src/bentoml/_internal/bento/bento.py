@@ -343,7 +343,7 @@ class Bento(StoreItem):
                     path = fs.path.combine(dir_path, f.name).lstrip("/")
                     if specs.includes(path):
                         if ctx_fs.getsize(path) > 10 * 1024 * 1024:
-                            logger.warn("File size is larger than 10MiB: %s", path)
+                            logger.warning("File size is larger than 10MiB: %s", path)
                         target_fs.makedirs(dir_path, recreate=True)
                         copy_file(ctx_fs, path, target_fs, path)
             if image is None:
@@ -390,8 +390,32 @@ class Bento(StoreItem):
             with bento_fs.open(fs.path.combine("apis", "openapi.yaml"), "w") as f:
                 yaml.dump(svc.openapi_spec, f)
             if not is_legacy:
+                bentoschema = svc.schema()
                 with bento_fs.open(fs.path.combine("apis", "schema.json"), "w") as f:
-                    json.dump(svc.schema(), f, indent=2)
+                    json.dump(bentoschema, f, indent=2)
+                openai_endpoint = None
+                _suffix = "/chat/completions"
+                _len_suffix = len(_suffix)
+
+                try:
+                    first_match = next(
+                        p
+                        for p in bentoschema["paths"]
+                        if isinstance(p, str) and p.endswith(_suffix)
+                    )
+                    openai_endpoint = first_match[:-_len_suffix]
+                except StopIteration:
+                    pass
+                except KeyError:
+                    # "paths" should never be missing when creating new bentos.
+                    # but at least warn the user.
+                    logger.warning(
+                        "'paths' not found in generated schemas. Please report this issue upstream at https://github.com/bentoml/BentoML/issues"
+                    )
+                    pass
+
+                if openai_endpoint is not None:
+                    build_config.labels["openai_endpoint"] = openai_endpoint
 
         if image is None:
             bento_info = BentoInfo(
