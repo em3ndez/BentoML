@@ -22,10 +22,11 @@ if t.TYPE_CHECKING:
 
 
 class ResultStatus(enum.Enum):
+    PENDING = "pending"
     IN_PROGRESS = "in_progress"
-    SUCCESS = "success"
-    FAILURE = "failure"
-    CANCELLED = "cancelled"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELED = "canceled"
 
 
 @attrs.frozen
@@ -108,28 +109,33 @@ class Sqlite3Store(ResultStore[Request, Response]):
 
     async def __aenter__(self) -> "t.Self":
         self._conn = await self._conn
-        await self._init_db()
         return self
 
     async def __aexit__(self, *_: t.Any) -> None:
         await self._conn.close()
 
-    async def _init_db(self) -> None:
-        await self._conn.execute(
-            textwrap.dedent("""\
-            CREATE TABLE IF NOT EXISTS result (
-                task_id TEXT PRIMARY KEY,
-                name TEXT,
-                input BLOB,
-                status TEXT,
-                result BLOB,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                executed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                completed_at TIMESTAMP DEFAULT NULL
+    @classmethod
+    def init_db(cls, db_file: str) -> None:
+        import sqlite3
+
+        with sqlite3.connect(
+            db_file, detect_types=sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES
+        ) as conn:
+            conn.execute(
+                textwrap.dedent("""\
+                CREATE TABLE IF NOT EXISTS result (
+                    task_id TEXT PRIMARY KEY,
+                    name TEXT,
+                    input BLOB,
+                    status TEXT,
+                    result BLOB,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    executed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    completed_at TIMESTAMP DEFAULT NULL
+                )
+                """)
             )
-            """)
-        )
-        await self._conn.commit()
+            conn.commit()
 
     async def new_entry(self, name: str, input: Request) -> str:
         task_id = uuid.uuid4().hex
