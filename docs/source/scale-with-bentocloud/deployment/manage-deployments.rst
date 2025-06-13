@@ -241,7 +241,7 @@ To roll out a Deployment:
       bentoml.deployment.update(name="deployment-1", bento="bento_name:version")
 
       # Use the project directory
-      bentoml.deployment.update(name="deployment-1", project_path="./project/directory")
+      bentoml.deployment.update(name="deployment-1", bento="./project/directory")
 
 Apply
 -----
@@ -254,7 +254,7 @@ The ``apply`` operation is a comprehensive way to manage Deployments, allowing y
 The differences between ``apply`` and ``update``:
 
 - **Update (Patch-only):** Makes minimal changes, only updating what you specify.
-- **Apply (Overriding):** Considers the entire configuration and may reset unspecified fields to their default values or remove them if they're not present in the applied configuration. If a Deployment does exist, applying the configuration will create the Deployment.
+- **Apply (Overriding):** Considers the entire configuration and may reset unspecified fields to their default values or remove them if they're not present in the applied configuration. If a Deployment does not exist, applying the configuration will create the Deployment.
 
 To apply new configurations to a Deployment, you define them in a separate file as reference.
 

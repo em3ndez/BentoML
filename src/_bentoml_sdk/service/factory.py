@@ -15,9 +15,9 @@ import anyio.to_thread
 import attrs
 from simple_di import Provide
 from simple_di import inject
+from starlette.applications import Starlette
 from typing_extensions import Unpack
 
-from bentoml import Runner
 from bentoml._internal.bento.bento import Bento
 from bentoml._internal.bento.build_config import BentoEnvSchema
 from bentoml._internal.configuration.containers import BentoMLContainer
@@ -27,6 +27,7 @@ from bentoml._internal.utils import deprecated
 from bentoml._internal.utils import dict_filter_none
 from bentoml.exceptions import BentoMLConfigException
 from bentoml.exceptions import BentoMLException
+from bentoml.legacy import Runner
 
 from ..images import Image
 from ..method import APIMethod
@@ -37,7 +38,7 @@ from .config import ServiceConfig as Config
 
 logger = logging.getLogger("bentoml.serve")
 
-T = t.TypeVar("T", bound=object)
+T = t.TypeVar("T")
 
 if t.TYPE_CHECKING:
     from bentoml._internal import external_typing as ext
@@ -51,6 +52,10 @@ if t.TYPE_CHECKING:
 
     class _ServiceDecorator(t.Protocol):
         def __call__(self, inner: type[T]) -> Service[T]: ...
+
+
+class PathMetadata(t.TypedDict):
+    mounted: bool
 
 
 def with_config(
@@ -67,17 +72,23 @@ def convert_envs(envs: t.List[t.Dict[str, t.Any]]) -> t.List[BentoEnvSchema]:
     return [BentoEnvSchema(**env) for env in envs]
 
 
+class _DummyService:
+    pass
+
+
 @attrs.define
 class Service(t.Generic[T]):
     """A Bentoml service that can be served by BentoML server."""
 
-    config: Config
-    inner: type[T]
+    name: str
+    config: Config = attrs.field(factory=Config)
+    inner: type[T] = _DummyService
     image: t.Optional[Image] = None
     envs: t.List[BentoEnvSchema] = attrs.field(factory=list, converter=convert_envs)
     labels: t.Dict[str, str] = attrs.field(factory=dict)
-    bento: t.Optional[Bento] = attrs.field(init=False, default=None)
     models: list[Model[t.Any]] = attrs.field(factory=list)
+    cmd: t.Optional[t.List[str]] = None
+    bento: t.Optional[Bento] = attrs.field(init=False, default=None)
     apis: dict[str, APIMethod[..., t.Any]] = attrs.field(factory=dict)
     dependencies: dict[str, Dependency[t.Any]] = attrs.field(factory=dict, init=False)
     mount_apps: list[tuple[ext.ASGIApp, str, str]] = attrs.field(
@@ -207,19 +218,65 @@ class Service(t.Generic[T]):
         return get_default_svc_readme(self)
 
     def schema(self) -> dict[str, t.Any]:
+        def _build_full_path(*path_segments: str) -> str:
+            # Combines URL path segments into a normalized path.
+            # Ensures it starts with '/' and has no trailing '/' (unless it's just '/').
+            # Collapses multiple slashes.
+            parts: list[str] = []
+            for segment in path_segments:
+                if not segment:
+                    continue
+                # Split by '/' and filter out empty strings that result from '//' or trailing/leading '/'
+                parts.extend(p for p in segment.split("/") if p)
+
+            if not parts:
+                return "/"
+
+            normalized_path = "/" + "/".join(parts)
+            return normalized_path
+
+        # Add API method routes (these are already full paths from method.route)
+        all_paths: dict[str, PathMetadata] = dict(
+            (_build_full_path(method.route), {"mounted": False})
+            for method in self.apis.values()
+        )
+
+        # Store id(app) to avoid reprocessing
+        processed_mounted_apps: set[int] = set()
+
+        def extract_routes_from_asgi_app(app: t.Any, current_prefix: str) -> None:
+            if app is None or id(app) in processed_mounted_apps:
+                return
+            processed_mounted_apps.add(id(app))
+
+            # Introspect ASGI app (FastAPI/Starlette)
+            if issubclass(app.__class__, Starlette):
+                for route_item in app.routes:
+                    if hasattr(route_item, "path") and isinstance(route_item.path, str):
+                        item_specific_path = route_item.path
+                        # current_prefix is the path *to* this app.
+                        # item_specific_path is relative to this app.
+                        full_item_path = _build_full_path(
+                            current_prefix, item_specific_path
+                        )
+                        all_paths[full_item_path] = {"mounted": True}
+
+                        if hasattr(route_item, "app") and route_item.app is not None:
+                            extract_routes_from_asgi_app(route_item.app, full_item_path)
+
+        for mounted_app, mount_path_prefix, _ in self.mount_apps:
+            normalized_base_prefix = _build_full_path(mount_path_prefix)
+            extract_routes_from_asgi_app(mounted_app, normalized_base_prefix)
+
         return dict_filter_none(
             {
                 "name": self.name,
                 "type": "service",
                 "routes": [method.schema() for method in self.apis.values()],
                 "description": getattr(self.inner, "__doc__", None),
+                "paths": all_paths,
             }
         )
-
-    @property
-    def name(self) -> str:
-        name = self.config.get("name") or self.inner.__name__
-        return name
 
     @property
     def import_string(self) -> str:
@@ -417,6 +474,11 @@ class Service(t.Generic[T]):
                 model.revision = revision
             svc.bento = bento
 
+    def needs_task_db(self) -> bool:
+        if "BENTOCLOUD_DEPLOYMENT_URL" in os.environ:
+            return False
+        return any(method.is_task for method in self.apis.values())
+
 
 @t.overload
 def service(inner: type[T], /) -> Service[T]: ...
@@ -424,12 +486,13 @@ def service(inner: type[T], /) -> Service[T]: ...
 
 @t.overload
 def service(
-    inner: None = ...,
-    /,
     *,
+    name: str | None = None,
     image: Image | None = None,
     envs: list[dict[str, str]] | None = None,
     labels: dict[str, str] | None = None,
+    cmd: list[str] | None = None,
+    service_class: type[Service[T]] = Service,
     **kwargs: Unpack[Config],
 ) -> _ServiceDecorator: ...
 
@@ -438,9 +501,12 @@ def service(
     inner: type[T] | None = None,
     /,
     *,
+    name: str | None = None,
     image: Image | None = None,
     envs: list[dict[str, str]] | None = None,
     labels: dict[str, str] | None = None,
+    cmd: list[str] | None = None,
+    service_class: type[Service[T]] = Service,
     **kwargs: Unpack[Config],
 ) -> t.Any:
     """Mark a class as a BentoML service.
@@ -458,12 +524,14 @@ def service(
     def decorator(inner: type[T]) -> Service[T]:
         if isinstance(inner, Service):
             raise TypeError("service() decorator can only be applied once")
-        return Service(
+        return service_class(
+            name=name or inner.__name__,
             config=config,
             inner=inner,
             image=image,
             envs=envs or [],
             labels=labels or {},
+            cmd=cmd,
         )
 
     return decorator(inner) if inner is not None else decorator
@@ -479,7 +547,6 @@ def runner_service(runner: Runner, **kwargs: Unpack[Config]) -> Service[t.Any]:
         def __init__(self) -> None:
             super().__init__(**runner.runnable_init_params)
 
-    RunnerHandle.__name__ = runner.name
     apis: dict[str, APIMethod[..., t.Any]] = {}
     assert runner.runnable_class.bentoml_runnable_methods__ is not None
     for method in runner.runner_methods:
@@ -501,31 +568,16 @@ def runner_service(runner: Runner, **kwargs: Unpack[Config]) -> Service[t.Any]:
         gpus: list[int] | str | int = resource_config["nvidia.com/gpu"]
         if isinstance(gpus, str):
             gpus = int(gpus)
-        if runner.workers_per_resource > 1:
-            config["workers"] = {}
-            workers_per_resource = int(runner.workers_per_resource)
-            if isinstance(gpus, int):
-                gpus = list(range(gpus))
-            for i in gpus:
-                config["workers"].extend([{"gpus": i}] * workers_per_resource)
-        else:
-            resources_per_worker = int(1 / runner.workers_per_resource)
-            if isinstance(gpus, int):
-                config["workers"] = [
-                    {"gpus": resources_per_worker}
-                    for _ in range(gpus // resources_per_worker)
-                ]
-            else:
-                config["workers"] = [
-                    {"gpus": gpus[i : i + resources_per_worker]}
-                    for i in range(0, len(gpus), resources_per_worker)
-                ]
+        elif isinstance(gpus, list):
+            gpus = len(gpus)
+        config["workers"] = int(gpus * runner.workers_per_resource)
     elif "cpus" in resource_config:
         config["workers"] = (
             math.ceil(resource_config["cpus"]) * runner.workers_per_resource
         )
     config.update(kwargs)
     return Service(
+        name=runner.name,
         config=config,
         inner=RunnerHandle,
         models=[BentoModel(m.tag) for m in runner.models],

@@ -236,13 +236,16 @@ class LoggingSchema(TypedDict, total=False):
     access: AccessLoggingSchema
 
 
-"""
-service level (per replica) config
-"""
+class EndpointsSchema(TypedDict, total=False):
+    livez: str
+    readyz: str
 
 
 class ServiceConfig(TypedDict, total=False):
-    name: str
+    """
+    service level (per replica) config
+    """
+
     traffic: TrafficSchema
     backlog: Annotated[int, Ge(64)]
     max_runner_connections: Posint
@@ -257,6 +260,7 @@ class ServiceConfig(TypedDict, total=False):
     runner_probe: RunnerProbeSchema
     tracing: TracingSchema
     monitoring: MonitoringSchema
+    endpoints: EndpointsSchema
 
 
 schema_type = TypeAdapter(ServiceConfig)
